@@ -1,0 +1,42 @@
+# ============================================================
+# Smart Parking Web Application – Python Dependencies
+# ============================================================
+# Install all packages with:  pip install -r requirements.txt
+# ============================================================
+
+# --- Web Dashboard ---
+# Streamlit: turns Python scripts into interactive web apps.
+# Used to build the parking slot dashboard UI with zero HTML/CSS/JS.
+streamlit>=1.35.0
+
+# --- Computer Vision ---
+# OpenCV: industry-standard library for image and video processing.
+# Used to read video frames, draw bounding boxes, and manipulate images.
+opencv-python>=4.9.0
+
+# --- AI / Object Detection ---
+# Ultralytics: official package for YOLOv8.
+# Provides the pretrained model (yolov8n.pt) and the inference API.
+# Automatically downloads weights on first run.
+ultralytics>=8.2.0
+
+# --- Numerical Computing ---
+# NumPy: fast array and matrix operations.
+# Used for frame data (images are NumPy arrays) and IoU calculations.
+# Also a core dependency of OpenCV and Ultralytics.
+numpy>=1.26.0
+
+# --- Image Handling ---
+# Pillow: Python Imaging Library.
+# Used by Streamlit to display images and by Ultralytics internally.
+Pillow>=10.0.0
+
+# --- Testing ---
+# Pytest: simple and powerful testing framework.
+# Used to write and run unit tests for the detection and database modules.
+pytest>=7.4.0
+
+# ============================================================
+# NOTE: sqlite3 is NOT listed here because it is part of
+# Python's standard library and requires no separate install.
+# ============================================================
