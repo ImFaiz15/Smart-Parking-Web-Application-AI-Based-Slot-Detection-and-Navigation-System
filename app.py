@@ -51,7 +51,7 @@ REFRESH_SECONDS = 5    # Default auto-refresh interval in seconds
 # card styles, and hover animations beyond what Streamlit normally allows.
 
 def apply_styles() -> None:
-    Injects custom CSS into the Streamlit page for premium styling."""
+    """Injects custom CSS into the Streamlit page for premium styling."""
     st.markdown("""
     <style>
 
@@ -198,7 +198,7 @@ def apply_styles() -> None:
     }
 
     </style>
-        , unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
