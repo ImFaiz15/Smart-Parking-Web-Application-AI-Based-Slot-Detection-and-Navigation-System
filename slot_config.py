@@ -57,9 +57,9 @@ OVERLAP_THRESHOLD = 0.15
 YOLO_CONFIDENCE = 0.35
 
 # YOLOv8 model file to use.
-# 'yolov8n.pt' = Nano (fastest, smallest, good for student projects)
-# 'yolov8s.pt' = Small (slightly more accurate, slightly slower)
-MODEL_PATH = "yolov8n.pt"
+# 'best.pt'    = YOUR custom-trained model (placed in project root)
+# 'yolov8n.pt' = Nano pretrained (fallback if best.pt is missing)
+MODEL_PATH = "best.pt"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
