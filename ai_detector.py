@@ -4,7 +4,7 @@ ai_detector.py  –  AI Vehicle Detection Pipeline (Module 4 – Updated)
 This file is the CORE AI engine for the Smart Parking System.
 
 WHAT CHANGED (from original):
-  ✅ Uses best.pt (custom-trained YOLOv8) instead of yolov8n.pt
+  ✅ Uses best.pt  (custom-trained YOLOv8) instead of yolov8n.pt
   ✅ Supports VIDEO files (mp4, avi, mkv) and WEBCAM feeds
   ✅ Processes frames in real-time with FPS control
   ✅ Directly writes slot statuses to parking.db after each frame
