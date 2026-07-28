@@ -1,11 +1,13 @@
 """
-app.py  –  Smart Parking Web Application
+app.py  –  Smart Parking Web Application  (Phase 3 — SQLite Live Mode)
 ─────────────────────────────────────────────────────────────────────────────
-Main Streamlit dashboard.
+Main Streamlit dashboard — Phase 3: reads LIVE slot data from parking.db.
 
-Phase 1  →  Simulation Mode  (no AI, no database yet)
-Phase 2  →  Will connect to YOLOv8 detection pipeline
-Phase 3  →  Will read live data from SQLite database
+How Phase 3 works:
+  1. On every refresh, load_slots_from_db() queries parking.db.
+  2. The DB is updated in real time by detection_engine.py (background).
+  3. st.rerun() re-runs this script every N seconds (auto-refresh loop).
+  4. The dashboard always shows the latest slot states from the database.
 
 Run this file with:
     streamlit run app.py
@@ -13,9 +15,23 @@ Run this file with:
 """
 
 import time
-import random
 from datetime import datetime
 import streamlit as st
+
+# ── Phase 3: Import database functions from parking_db.py ─────────────────────
+# init_parking_db() → creates the table if it doesn't exist (safe always)
+# seed_slots()      → inserts 12 default slots only if table is empty
+# get_all_slots()   → SELECT * FROM parking_slots → list of dicts
+# get_stats()       → {total, available, occupied, reserved} counts
+from parking_db import (
+    init_parking_db,
+    seed_slots,
+    get_all_slots,
+    get_stats,
+    STATUS_AVAILABLE,
+    STATUS_OCCUPIED,
+    STATUS_RESERVED,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -38,7 +54,6 @@ st.set_page_config(
 # Keeping all magic numbers in one place makes the code easier to tweak.
 # In Phase 2 these will be moved to config/settings.py.
 
-TOTAL_SLOTS     = 12   # Default number of parking slots to display
 GRID_COLUMNS    = 4    # How many slot cards per row in the grid
 REFRESH_SECONDS = 5    # Default auto-refresh interval in seconds
 
@@ -143,6 +158,11 @@ def apply_styles() -> None:
         background: linear-gradient(145deg, #7f1d1d, #dc2626);
         border: 1px solid #f8717144;
     }
+    /* Phase 3: Reserved slot — dark grey/slate */
+    .slot-reserved {
+        background: linear-gradient(145deg, #0f172a, #1e293b);
+        border: 1px solid #33415544;
+    }
     .slot-id {
         font-size: 1.2rem;
         font-weight: 800;
@@ -155,6 +175,13 @@ def apply_styles() -> None:
         letter-spacing: 0.8px;
         opacity: 0.88;
         color: #ffffff;
+    }
+    .slot-vehicle-num {
+        font-size: 0.6rem;
+        color: #ffffff99;
+        margin-top: 4px;
+        font-family: monospace;
+        font-weight: 600;
     }
 
     /* ── Section Label ───────────────────────────────────────────── */
@@ -202,45 +229,60 @@ def apply_styles() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 ─ DATA SIMULATION
+# SECTION 4 ─ DATABASE DATA LOADER  (Phase 3 — replaces generate_slots)
 # ══════════════════════════════════════════════════════════════════════════════
-# This function is the ONLY part that changes in Phase 2.
-# Instead of random.choice(), it will read from the SQLite database
-# (which is updated by the YOLOv8 detection pipeline).
+# Phase 3 replaces the random simulation with real data from parking.db.
 #
-# Each slot is a plain Python dictionary — simple and easy to understand.
+# load_slots_from_db() calls get_all_slots() which runs:
+#   SELECT * FROM parking_slots ORDER BY slot_row, slot_number
+# and returns a list of dicts from the database.
+#
+# We then convert each DB row into the format the UI cards expect:
+#   DB dict  →  {'slot_id': 'A1', 'status': 'occupied', 'vehicle_number': 'MH01AB'}
+#   UI dict  →  {'id': 'A1', 'occupied': True, 'reserved': False, 'vehicle': 'MH01AB'}
 
-def generate_slots(total: int) -> list:
+def load_slots_from_db() -> list:
     """
-    Simulates parking slot data with random occupancy.
+    Reads ALL parking slot statuses from parking.db and converts them
+    into the dictionary format expected by the UI rendering functions.
 
-    Parameters:
-        total  (int)  : Number of slots to generate.
+    WHY a conversion step?
+      The database stores status as TEXT strings:
+        'available', 'occupied', 'reserved'
+      The original UI functions use boolean flags (occupied: True/False).
+      This function bridges the two formats cleanly.
 
     Returns:
-        list of dicts : Each dict has keys → 'id' and 'occupied'.
+        list of dicts, each with:
+          'id'       (str)  : Slot label, e.g. 'A1', 'B3'
+          'status'   (str)  : Raw DB status: 'available'|'occupied'|'reserved'
+          'occupied' (bool) : True only if status == 'occupied'
+          'reserved' (bool) : True only if status == 'reserved'
+          'vehicle'  (str)  : Vehicle number plate, or empty string
 
-    Example output:
+    Example:
         [
-            {'id': 'A1', 'occupied': False},
-            {'id': 'A2', 'occupied': True},
-            ...
+            {'id': 'A1', 'status': 'occupied',  'occupied': True,  'reserved': False, 'vehicle': 'MH01AB1234'},
+            {'id': 'A2', 'status': 'available', 'occupied': False, 'reserved': False, 'vehicle': ''},
+            {'id': 'A3', 'status': 'reserved',  'occupied': False, 'reserved': True,  'vehicle': ''},
         ]
     """
-    slots   = []
-    letters = "ABCDEFGHIJ"   # Row labels — supports up to 10 rows
+    # Step 1: Fetch raw rows from SQLite (each row is a dict from parking_db.py)
+    raw_slots = get_all_slots()
 
-    for i in range(total):
-        row    = letters[i // GRID_COLUMNS]   # e.g. 0-3 → 'A', 4-7 → 'B'
-        col    = (i % GRID_COLUMNS) + 1       # e.g. 1, 2, 3, 4, 1, 2 ...
-        slot_id = f"{row}{col}"               # e.g. 'A1', 'A2', 'B1'
-
-        slots.append({
-            "id"      : slot_id,
-            "occupied": random.choice([True, False]),   # ← replaced by AI in Phase 2
+    # Step 2: Convert DB format → UI format
+    ui_slots = []
+    for s in raw_slots:
+        status = s.get("status", STATUS_AVAILABLE)
+        ui_slots.append({
+            "id"      : s["slot_id"],
+            "status"  : status,
+            "occupied": status == STATUS_OCCUPIED,   # True only if occupied
+            "reserved": status == STATUS_RESERVED,   # True only if reserved
+            "vehicle" : s.get("vehicle_number") or "",
         })
 
-    return slots
+    return ui_slots
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,12 +292,14 @@ def generate_slots(total: int) -> list:
 # Streamlit's slider and toggle widgets return their current value every
 # time the user interacts — the whole script re-runs automatically.
 
-def render_sidebar() -> tuple:
+def render_sidebar(stats: dict) -> tuple:
     """
-    Renders the sidebar with interactive controls.
+    Renders the sidebar with interactive controls and live DB stats.
+
+    Parameters:
+        stats (dict): Live counts from get_stats() — used to show breakdown.
 
     Returns:
-        total_slots      (int)  : Number of slots chosen by the user.
         refresh_interval (int)  : Auto-refresh delay in seconds.
         auto_refresh     (bool) : Whether auto-refresh is enabled.
     """
@@ -263,14 +307,30 @@ def render_sidebar() -> tuple:
         st.markdown("## ⚙️ Controls")
         st.divider()
 
-        total_slots = st.slider(
-            label="🅿️ Total Parking Slots",
-            min_value=4,
-            max_value=24,
-            value=TOTAL_SLOTS,
-            step=4,
-            help="Drag to increase or decrease the number of simulated slots.",
-        )
+        # Phase 3: Show live database breakdown at the top of the sidebar
+        st.markdown("### 📊 Live DB Counts")
+        st.markdown(f"""
+        <div style="background:#0e1c33;border:1px solid #1a3058;border-radius:12px;padding:14px 16px;">
+            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.82rem;border-bottom:1px solid #0d1f3c;">
+                <span style="color:#4a6080;font-weight:600;">🟢 Available</span>
+                <span style="color:#4ade80;font-weight:700;">{stats.get('available', 0)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.82rem;border-bottom:1px solid #0d1f3c;">
+                <span style="color:#4a6080;font-weight:600;">🔴 Occupied</span>
+                <span style="color:#f87171;font-weight:700;">{stats.get('occupied', 0)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.82rem;border-bottom:1px solid #0d1f3c;">
+                <span style="color:#4a6080;font-weight:600;">⚫ Reserved</span>
+                <span style="color:#94a3b8;font-weight:700;">{stats.get('reserved', 0)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.82rem;">
+                <span style="color:#4a6080;font-weight:600;">🏢 Total</span>
+                <span style="color:#c8daf5;font-weight:700;">{stats.get('total', 0)}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.divider()
 
         refresh_interval = st.slider(
             label="⏱️ Refresh Every (seconds)",
@@ -278,27 +338,33 @@ def render_sidebar() -> tuple:
             max_value=30,
             value=REFRESH_SECONDS,
             step=1,
-            help="How often the dashboard reloads and re-randomizes slot data.",
+            help="How often the dashboard re-queries parking.db for fresh slot data.",
         )
 
         auto_refresh = st.toggle("🔄 Auto Refresh", value=True)
 
         st.divider()
         st.markdown("### 🗺️ Legend")
-        st.markdown("🟢 **Green** — Slot is free")
-        st.markdown("🔴 **Red**   — Vehicle present")
+        st.markdown("🟢 **Green**  — Available")
+        st.markdown("🔴 **Red**    — Occupied")
+        st.markdown("⚫ **Grey**   — Reserved")
 
         st.divider()
         st.markdown("### ℹ️ Mode")
-        st.info(
-            "**Simulation Mode**\n\n"
-            "Slot data is randomly generated.\n\n"
-            "Phase 2 will plug in live YOLOv8 "
-            "detection output here.",
+        st.success(
+            "**Live Database Mode** ✅\n\n"
+            "Slot data is read directly from `parking.db`.\n\n"
+            "Run `detection_engine.py` in a separate terminal "
+            "to push real-time AI detection results here.",
             icon="🤖",
         )
 
-    return total_slots, refresh_interval, auto_refresh
+        st.divider()
+        st.markdown("### 🗄️ Data Source")
+        st.code("parking.db  →  parking_slots", language="text")
+        st.caption(f"Last read: {datetime.now().strftime('%I:%M:%S %p')}")
+
+    return refresh_interval, auto_refresh
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -314,7 +380,7 @@ def render_header() -> None:
     <div class="header-container">
         <div class="header-title">🅿️ Smart Parking System</div>
         <div class="header-subtitle">AI-Based Slot Detection &amp; Navigation Dashboard</div>
-        <div class="header-badge">🟡 SIMULATION MODE &nbsp;•&nbsp; {timestamp}</div>
+        <div class="header-badge">🟢 LIVE — SQLite Database Mode &nbsp;•&nbsp; {timestamp}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -327,19 +393,29 @@ def render_header() -> None:
 
 def render_stats(slots: list) -> None:
     """
-    Renders 4 summary cards:
-      ● Total Slots
-      ● Available
-      ● Occupied
-      ● Occupancy Rate  (color-coded: green → yellow → red)
+    Renders 4 summary stat cards using LIVE data from parking.db.
+
+    Phase 3 change:
+      Now counts 'reserved' slots separately instead of treating
+      everything as occupied vs available.
+
+    Stats shown:
+      ● Total Slots    (blue)
+      ● Available      (green)
+      ● Occupied       (red)
+      ● Occupancy Rate (color-coded: green → yellow → red)
 
     Parameters:
-        slots (list): The list of slot dicts from generate_slots().
+        slots (list): The list of UI slot dicts from load_slots_from_db().
+                      Each dict has 'occupied' (bool) and 'reserved' (bool).
     """
     total     = len(slots)
-    occupied  = sum(1 for s in slots if s["occupied"])
-    available = total - occupied
-    rate      = round((occupied / total) * 100) if total > 0 else 0
+    occupied  = sum(1 for s in slots if s["occupied"])    # status == 'occupied'
+    reserved  = sum(1 for s in slots if s["reserved"])    # status == 'reserved'
+    available = total - occupied - reserved                 # everything else
+
+    # Occupancy rate counts only genuinely occupied (not reserved) slots
+    rate = round((occupied / total) * 100) if total > 0 else 0
 
     # Pick a color for the occupancy rate: green < 50%, yellow < 75%, red ≥ 75%
     if rate >= 75:
@@ -383,12 +459,11 @@ def render_stats(slots: list) -> None:
             <div class="stats-label">Occupancy Rate</div>
         </div>""", unsafe_allow_html=True)
 
-    # Occupancy progress bar — visual indicator below the cards
-    bar_color = rate_color
+    # Occupancy progress bar
     st.markdown(f"""
     <div class="occ-bar-bg">
         <div class="occ-bar-fill"
-             style="width:{rate}%; background:{bar_color};"></div>
+             style="width:{rate}%; background:{rate_color};"></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -402,33 +477,71 @@ def render_stats(slots: list) -> None:
 
 def render_grid(slots: list) -> None:
     """
-    Renders the parking bay grid.
+    Renders the parking bay grid with LIVE data from parking.db.
 
-    Green card  → slot is available.
-    Red card    → slot is occupied.
+    Phase 3 changes:
+      - Handles three statuses from DB: available, occupied, reserved.
+      - Shows vehicle number plate on occupied cards (if available in DB).
+      - Adds a 'drive lane' divider between rows for a realistic layout.
+
+    Card colours:
+      🟢 Green  → available  (slot is free)
+      🔴 Red    → occupied   (vehicle detected / parked)
+      ⚫ Grey   → reserved   (pre-booked / blocked)
 
     Parameters:
-        slots (list): The list of slot dicts from generate_slots().
+        slots (list): The list of UI slot dicts from load_slots_from_db().
+                      Each dict has 'status', 'occupied', 'reserved', 'vehicle'.
     """
-    st.markdown('<div class="section-label">🗺️ Parking Bay Overview</div>',
+    st.markdown('<div class="section-label">🗺️ Parking Bay Overview — Live from parking.db</div>',
                 unsafe_allow_html=True)
 
-    # Split the flat list into sub-lists of GRID_COLUMNS each.
-    # Example for 12 slots, 4 cols:
-    #   [[A1,A2,A3,A4], [B1,B2,B3,B4], [C1,C2,C3,C4]]
+    # Split flat list into rows of GRID_COLUMNS each
+    # e.g. 12 slots → [[A1,A2,A3,A4], [B1,B2,B3,B4], [C1,C2,C3,C4]]
     rows = [slots[i : i + GRID_COLUMNS] for i in range(0, len(slots), GRID_COLUMNS)]
 
-    for row in rows:
+    for row_idx, row in enumerate(rows):
+        # Add a visual drive lane divider between rows (not before first row)
+        if row_idx > 0:
+            st.markdown(
+                '<div style="background:#080f1e;border-top:1px dashed #1a3058;'
+                'border-bottom:1px dashed #1a3058;text-align:center;padding:5px 0;'
+                'font-size:0.62rem;color:#1e3a5f;font-weight:700;letter-spacing:3px;'
+                'margin:6px 0;">─── 🚗 DRIVE LANE ───</div>',
+                unsafe_allow_html=True,
+            )
+
         cols = st.columns(GRID_COLUMNS)
         for col_widget, slot in zip(cols, row):
-            css   = "slot-occupied"  if slot["occupied"] else "slot-available"
-            label = "🔴 OCCUPIED"    if slot["occupied"] else "🟢 AVAILABLE"
+
+            # ── Determine card colour, icon, and label based on DB status ──────
+            if slot["occupied"]:
+                css   = "slot-occupied"
+                icon  = "🔴"
+                label = "OCCUPIED"
+                # Show vehicle number if present in the database
+                vehicle_html = (
+                    f'<div class="slot-vehicle-num">🚗 {slot["vehicle"]}</div>'
+                    if slot["vehicle"] else ""
+                )
+            elif slot["reserved"]:
+                css   = "slot-reserved"
+                icon  = "⚫"
+                label = "RESERVED"
+                vehicle_html = '<div class="slot-vehicle-num">🔒 PRE-BOOKED</div>'
+            else:   # available
+                css   = "slot-available"
+                icon  = "🟢"
+                label = "AVAILABLE"
+                vehicle_html = ""
 
             with col_widget:
                 st.markdown(f"""
                 <div class="slot-card {css}">
+                    <div style="font-size:1.4rem;">{icon}</div>
                     <div class="slot-id">🅿 {slot["id"]}</div>
                     <div class="slot-status-text">{label}</div>
+                    {vehicle_html}
                 </div>""", unsafe_allow_html=True)
 
 
@@ -440,22 +553,37 @@ def render_grid(slots: list) -> None:
 
 def render_table(slots: list) -> None:
     """
-    Shows an expandable table with all slot data.
-    Collapsed by default so it doesn't crowd the main view.
+    Shows an expandable table with all slot data — live from parking.db.
+
+    Phase 3 change:
+      Now includes a 'Vehicle No.' column and handles 'reserved' status.
+      The caption shows the DB file name and last-read timestamp,
+      proving to the viva examiner that data comes from SQLite.
 
     Parameters:
-        slots (list): The list of slot dicts from generate_slots().
+        slots (list): The list of UI slot dicts from load_slots_from_db().
     """
-    with st.expander("📋 View Full Slot Status Table", expanded=False):
+    with st.expander("📋 View Raw Slot Data (Live from parking.db)", expanded=False):
+
+        def status_label(s):
+            if s["occupied"]: return "🔴 Occupied"
+            if s["reserved"]: return "⚫ Reserved"
+            return "🟢 Available"
+
         table_data = {
-            "Slot ID" : [s["id"] for s in slots],
-            "Status"  : ["🔴 Occupied" if s["occupied"] else "🟢 Available"
-                         for s in slots],
+            "Slot ID"    : [s["id"]           for s in slots],
+            "Status"     : [status_label(s)    for s in slots],
+            "Vehicle No.": [s["vehicle"] or "—" for s in slots],
         }
         st.dataframe(
             table_data,
             use_container_width=True,
             hide_index=True,
+        )
+        st.caption(
+            f"📁 Source: parking.db → parking_slots table  •  "
+            f"{len(slots)} slot(s)  •  "
+            f"Read at {datetime.now().strftime('%I:%M:%S %p')}"
         )
 
 
@@ -467,9 +595,9 @@ def render_footer() -> None:
     """Renders a minimal footer at the bottom of the page."""
     st.markdown("""
     <div class="footer">
-        Smart Parking System &nbsp;|&nbsp;
-        Simulation Mode &nbsp;|&nbsp;
-        Built with 🐍 Python · Streamlit · OpenCV · YOLOv8
+        🅿️ Smart Parking System &nbsp;|&nbsp;
+        Phase 3 — Live SQLite Mode &nbsp;|&nbsp;
+        Python · Streamlit · OpenCV · YOLOv8 · SQLite
     </div>
     """, unsafe_allow_html=True)
 
@@ -488,43 +616,80 @@ def render_footer() -> None:
 #   In Phase 2, step 3 will query the database instead of using random data.
 
 def main() -> None:
-    """Entry point — assembles the full dashboard."""
+    """
+    Entry point — assembles the full Phase 3 live dashboard.
 
-    # ── Step 1: Apply CSS ────────────────────────────────────────────
+    Phase 3 execution order:
+      1.  Inject CSS styles.
+      2.  Ensure parking.db + parking_slots table exist (safe, non-destructive).
+      3.  Seed 12 default slots IF the table is empty (first run only).
+      4.  Fetch live stats from the DB (for the sidebar breakdown panel).
+      5.  Render sidebar (returns refresh settings).
+      6.  Render header.
+      7.  Load ALL slots from parking.db → convert to UI format.
+      8.  Render stats cards + occupancy bar.
+      9.  Render parking grid (colour-coded by live DB status).
+      10. Render raw data table (proves data comes from SQLite).
+      11. Render footer.
+      12. Auto-refresh: sleep N seconds → st.rerun() → go back to step 2.
+    """
+
+    # ── Step 1: CSS ────────────────────────────────────────────────────────────
     apply_styles()
 
-    # ── Step 2: Sidebar (returns user settings) ──────────────────────
-    total_slots, refresh_interval, auto_refresh = render_sidebar()
+    # ── Step 2 & 3: Ensure DB is ready, seed if empty ─────────────────────────
+    # init_parking_db() uses CREATE TABLE IF NOT EXISTS → completely safe to call
+    # on every refresh. It will NEVER overwrite or reset existing data.
+    # seed_slots() checks if rows already exist before inserting — also safe.
+    init_parking_db()
+    seed_slots(total_rows=3, cols=4)
 
-    # ── Step 3: Header ───────────────────────────────────────────────
+    # ── Step 4: Fetch live stats (needed by sidebar) ────────────────────────────
+    # get_stats() runs: SELECT status, COUNT(*) FROM parking_slots GROUP BY status
+    stats = get_stats()
+
+    # ── Step 5: Sidebar ────────────────────────────────────────────────────────
+    refresh_interval, auto_refresh = render_sidebar(stats)
+
+    # ── Step 6: Header ────────────────────────────────────────────────────────
     render_header()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Step 4: Generate simulated data ──────────────────────────────
-    slots = generate_slots(total_slots)
+    # ── Step 7: Load LIVE slot data from parking.db ────────────────────────────
+    # This is the CORE Phase 3 change.
+    # get_all_slots() runs: SELECT * FROM parking_slots ORDER BY slot_row, slot_number
+    # load_slots_from_db() converts DB dicts → UI dicts (adds 'occupied', 'reserved' booleans)
+    slots = load_slots_from_db()
 
-    # ── Step 5: Stats row ────────────────────────────────────────────
+    # ── Step 8: Stats row ──────────────────────────────────────────────────────
     render_stats(slots)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Step 6: Parking grid ─────────────────────────────────────────
+    # ── Step 9: Parking grid ───────────────────────────────────────────────────
     render_grid(slots)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Step 7: Data table (collapsible) ─────────────────────────────
+    # ── Step 10: Raw data table (collapsible) ──────────────────────────────────
     render_table(slots)
 
-    # ── Step 8: Footer ───────────────────────────────────────────────
+    # ── Step 11: Footer ────────────────────────────────────────────────────────
     render_footer()
 
-    # ── Step 9: Auto-refresh ─────────────────────────────────────────
-    # Only runs if the user has toggled auto-refresh ON in the sidebar.
+    # ── Step 12: Auto-refresh ─────────────────────────────────────────────────
+    # How it works:
+    #   a. time.sleep(N)  → pause the script for N seconds
+    #   b. st.rerun()     → Streamlit restarts the script from line 1
+    #   c. On restart, load_slots_from_db() re-queries parking.db
+    #   d. If detection_engine.py updated the DB during the sleep,
+    #      the new statuses will appear on screen immediately.
+    #
+    # This creates a smooth live update loop with zero CPU waste during sleep.
     if auto_refresh:
         time.sleep(refresh_interval)
-        st.rerun()   # Restarts the entire script → fresh data → UI updates
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
