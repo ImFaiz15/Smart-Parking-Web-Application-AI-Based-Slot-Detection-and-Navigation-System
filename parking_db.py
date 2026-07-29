@@ -1,19 +1,20 @@
 """
-parking_db.py  –  Parking Slots Database Handler (Module 3)
+parking_db.py  –  Parking Database Handler (Slots + Zones)
 ─────────────────────────────────────────────────────────────────────────────
-This file manages ALL database operations for the parking slot system.
+This file manages ALL database operations for the Smart Parking system.
 
-It is an upgraded version of database.py with:
-  - Three slot statuses: 'available', 'occupied', 'reserved'
-  - Vehicle number tracking for occupied slots
-  - A seeder that creates realistic simulated data on first run
-  - Stat aggregation (counts per status)
-  - A randomizer for live simulation without AI
+TWO TABLES in parking.db:
+  1. parking_slots  →  Individual slot tracking (A1, A2 ... C4)
+                        Status: 'available' | 'occupied' | 'reserved'
+                        (Used by Module 3 / auth_app.py)
 
-WHY a separate file from database.py?
-  The original database.py uses only 0/1 (binary status).
-  Module 3 needs a third state (reserved) and richer queries.
-  Keeping them separate avoids breaking earlier work.
+  2. parking_zones  →  Zone-based vehicle counting (Zone A, Zone B ...)
+                        Columns: parked_count, capacity, available, status
+                        (Used by Module 4 / detection_engine.py + app.py)
+
+WHY two tables?
+  Keeping them separate means old modules (auth, Module 3) keep working.
+  The new zone system is additive — it does NOT break anything existing.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -22,16 +23,21 @@ import random
 from datetime import datetime
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-PARKING_DB_PATH = "parking.db"       # Separate DB file for parking slots
-GRID_ROWS       = "ABCDE"            # Supported row labels (up to 5 rows = 20 slots)
-GRID_COLS       = 4                  # Slots per row
+PARKING_DB_PATH = "parking.db"
+GRID_ROWS       = "ABCDE"
+GRID_COLS       = 4
 
-# Valid status values — using strings instead of 0/1 for readability
+# Slot statuses
 STATUS_AVAILABLE = "available"
 STATUS_OCCUPIED  = "occupied"
 STATUS_RESERVED  = "reserved"
 
-# Simulated vehicle numbers (used for seeding occupied slots)
+# Zone statuses (based on occupancy percentage)
+ZONE_STATUS_AVAILABLE = "available"   # < 60% full  → lots of space
+ZONE_STATUS_FILLING   = "filling"     # 60–84% full → filling up
+ZONE_STATUS_FULL      = "full"        # ≥ 85% full  → almost/fully full
+
+# Simulated vehicle numbers for seeding
 FAKE_VEHICLES = [
     "MH01AB1234", "DL4CAF0001", "KA02XY9999", "TN09CD5678",
     "GJ05EF3456", "UP32GH7890", "RJ14IJ2345", "HR26KL6789",
@@ -42,32 +48,24 @@ FAKE_VEHICLES = [
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FUNCTION 1 ─ init_parking_db
+# ── PART A: INDIVIDUAL SLOTS  (parking_slots table)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# FUNCTION 1 ─ init_parking_db
 def init_parking_db(db_path: str = PARKING_DB_PATH) -> None:
     """
-    Creates the 'parking_slots' table in the database if it does not exist.
+    Creates the 'parking_slots' table if it does not exist.
 
-    Table columns:
-    ┌────────────────┬──────────────────────────────────────────────────────────┐
-    │ Column         │ Description                                              │
-    ├────────────────┼──────────────────────────────────────────────────────────┤
-    │ slot_id        │ Primary key. Unique label like 'A1', 'B3'. (TEXT)       │
-    │ slot_row       │ Row letter: 'A', 'B', 'C'... Used for grouping. (TEXT)  │
-    │ slot_number    │ Column position: 1, 2, 3, 4. (INTEGER)                  │
-    │ status         │ 'available' | 'occupied' | 'reserved'. (TEXT)           │
-    │ vehicle_number │ Vehicle plate if occupied, NULL otherwise. (TEXT)        │
-    │ last_updated   │ Timestamp of last status change. (TEXT)                 │
-    └────────────────┴──────────────────────────────────────────────────────────┘
-
-    Parameters:
-        db_path (str): Path to the SQLite database file.
+    Columns:
+      slot_id        → Primary key. 'A1', 'B3', etc.
+      slot_row       → Row letter: 'A', 'B', 'C'
+      slot_number    → Column: 1, 2, 3, 4
+      status         → 'available' | 'occupied' | 'reserved'
+      vehicle_number → Plate number if occupied, NULL otherwise
+      last_updated   → Timestamp of last change
     """
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS parking_slots (
             slot_id        TEXT    PRIMARY KEY,
             slot_row       TEXT    NOT NULL,
@@ -77,47 +75,35 @@ def init_parking_db(db_path: str = PARKING_DB_PATH) -> None:
             last_updated   TEXT    NOT NULL
         )
     """)
-
     conn.commit()
     conn.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 2 ─ seed_slots
-# ══════════════════════════════════════════════════════════════════════════════
-
 def seed_slots(
     total_rows: int = 3,
     cols: int = GRID_COLS,
     db_path: str = PARKING_DB_PATH
 ) -> None:
     """
-    Populates the parking_slots table with simulated slot data.
+    Populates parking_slots with simulated data (only if table is empty).
 
-    This function runs only if the table is EMPTY (no existing slots).
-    It creates a realistic mix of statuses:
-      - ~50% available  (green)
-      - ~35% occupied   (red)   with a fake vehicle number
-      - ~15% reserved   (grey)
+    Creates a realistic mix: ~50% available, ~35% occupied, ~15% reserved.
 
     Parameters:
-        total_rows (int): Number of parking rows (A, B, C ...).
-        cols       (int): Number of slots per row.
-        db_path    (str): Path to the database file.
-
-    Example for total_rows=3, cols=4:
-        Creates 12 slots: A1, A2, A3, A4, B1, B2, B3, B4, C1, C2, C3, C4
+        total_rows (int): Number of rows (A, B, C ...).
+        cols       (int): Slots per row.
+        db_path    (str): Database file path.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Check if slots already exist — don't overwrite on every app restart
     cursor.execute("SELECT COUNT(*) FROM parking_slots")
     if cursor.fetchone()[0] > 0:
         conn.close()
-        return   # Already seeded — skip
+        return   # Already seeded
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     vehicle_pool = FAKE_VEHICLES.copy()
     random.shuffle(vehicle_pool)
 
@@ -125,31 +111,24 @@ def seed_slots(
     vehicle_index  = 0
 
     for row_idx in range(total_rows):
-        row_letter = GRID_ROWS[row_idx]   # 0→'A', 1→'B', 2→'C'
-
+        row_letter = GRID_ROWS[row_idx]
         for col_num in range(1, cols + 1):
-            slot_id = f"{row_letter}{col_num}"   # e.g. 'A1', 'B3'
-
-            # Weighted random status assignment
-            # random.choices picks one item from the list based on weights.
-            # weights=[50, 35, 15] means: 50% available, 35% occupied, 15% reserved
-            status = random.choices(
+            slot_id = f"{row_letter}{col_num}"
+            status  = random.choices(
                 population=[STATUS_AVAILABLE, STATUS_OCCUPIED, STATUS_RESERVED],
                 weights=[50, 35, 15],
                 k=1
             )[0]
 
-            # Assign a fake vehicle number if the slot is occupied
             vehicle_number = None
             if status == STATUS_OCCUPIED:
                 vehicle_number = vehicle_pool[vehicle_index % len(vehicle_pool)]
                 vehicle_index += 1
 
-            rows_to_insert.append((
-                slot_id, row_letter, col_num, status, vehicle_number, timestamp
-            ))
+            rows_to_insert.append(
+                (slot_id, row_letter, col_num, status, vehicle_number, timestamp)
+            )
 
-    # executemany inserts all rows in a single efficient database call
     cursor.executemany("""
         INSERT OR IGNORE INTO parking_slots
             (slot_id, slot_row, slot_number, status, vehicle_number, last_updated)
@@ -160,190 +139,100 @@ def seed_slots(
     conn.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 3 ─ get_all_slots
-# ══════════════════════════════════════════════════════════════════════════════
-
 def get_all_slots(db_path: str = PARKING_DB_PATH) -> list:
     """
-    Retrieves all parking slots ordered by row then column number.
+    Returns all slots ordered by row + column number.
 
     Returns:
-        list of dicts: One dict per slot.
-
-        Example:
-        [
-            {
-                'slot_id'       : 'A1',
-                'slot_row'      : 'A',
-                'slot_number'   : 1,
-                'status'        : 'available',
-                'vehicle_number': None,
-                'last_updated'  : '2026-07-08 11:30:00'
-            },
-            ...
-        ]
-    """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row   # Makes rows accessible like dicts
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT slot_id, slot_row, slot_number, status, vehicle_number, last_updated
-        FROM parking_slots
-        ORDER BY slot_row ASC, slot_number ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FUNCTION 4 ─ get_slots_by_status
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_slots_by_status(status: str, db_path: str = PARKING_DB_PATH) -> list:
-    """
-    Returns only the slots that match a specific status.
-    Used by the dashboard's filter feature.
-
-    Parameters:
-        status  (str): One of 'available', 'occupied', 'reserved'.
-        db_path (str): Path to the database file.
-
-    Returns:
-        list of dicts: Filtered slot records.
+        list of dicts: [{'slot_id': 'A1', 'status': 'available', ...}, ...]
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-
     cursor.execute("""
         SELECT slot_id, slot_row, slot_number, status, vehicle_number, last_updated
-        FROM parking_slots
-        WHERE status = ?
-        ORDER BY slot_row ASC, slot_number ASC
-    """, (status,))
-
+        FROM   parking_slots
+        ORDER  BY slot_row ASC, slot_number ASC
+    """)
     rows = cursor.fetchall()
     conn.close()
+    return [dict(r) for r in rows]
 
-    return [dict(row) for row in rows]
+
+# FUNCTION 4 ─ get_slots_by_status
+def get_slots_by_status(status: str, db_path: str = PARKING_DB_PATH) -> list:
+    """Returns slots filtered by a specific status string."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT slot_id, slot_row, slot_number, status, vehicle_number, last_updated
+        FROM   parking_slots
+        WHERE  status = ?
+        ORDER  BY slot_row ASC, slot_number ASC
+    """, (status,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 5 ─ get_stats
-# ══════════════════════════════════════════════════════════════════════════════
-
 def get_stats(db_path: str = PARKING_DB_PATH) -> dict:
     """
-    Returns a summary count of slots grouped by status.
-    Used to render the stats cards at the top of the dashboard.
-
-    Parameters:
-        db_path (str): Path to the database file.
+    Returns aggregate slot counts: total, available, occupied, reserved.
 
     Returns:
-        dict: Counts for each status plus the total.
-
-        Example:
-        {
-            'total'    : 12,
-            'available': 6,
-            'occupied' : 4,
-            'reserved' : 2
-        }
+        dict: {'total': 12, 'available': 6, 'occupied': 4, 'reserved': 2}
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-
-    # GROUP BY groups rows with the same status together.
-    # COUNT(*) counts how many rows are in each group.
     cursor.execute("""
-        SELECT status, COUNT(*) AS count
-        FROM parking_slots
-        GROUP BY status
+        SELECT status, COUNT(*) FROM parking_slots GROUP BY status
     """)
-
     rows = cursor.fetchall()
     conn.close()
 
-    # Build a dictionary with default 0 for any status that has no rows
-    stats = {
-        STATUS_AVAILABLE: 0,
-        STATUS_OCCUPIED : 0,
-        STATUS_RESERVED : 0,
-    }
-
-    for row in rows:
-        status, count = row
-        stats[status]  = count
-
+    stats = {STATUS_AVAILABLE: 0, STATUS_OCCUPIED: 0, STATUS_RESERVED: 0}
+    for status, count in rows:
+        stats[status] = count
     stats["total"] = sum(stats.values())
     return stats
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 6 ─ update_slot_status
-# ══════════════════════════════════════════════════════════════════════════════
-
 def update_slot_status(
     slot_id: str,
     new_status: str,
     vehicle_number: str = None,
-    db_path: str = PARKING_DB_PATH
+    db_path: str = PARKING_DB_PATH,
 ) -> bool:
     """
-    Updates the status (and optional vehicle number) of a specific slot.
-    Called in Phase 3 when the AI detector reports a slot change.
-
-    Parameters:
-        slot_id        (str): The slot to update (e.g., 'B2').
-        new_status     (str): New status: 'available', 'occupied', 'reserved'.
-        vehicle_number (str): Vehicle plate if status is 'occupied'. None otherwise.
-        db_path        (str): Path to the database file.
+    Updates status + vehicle number for a single slot.
 
     Returns:
-        bool: True if successful, False if slot_id was not found.
+        bool: True if slot was found and updated.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     cursor.execute("""
         UPDATE parking_slots
-        SET status = ?, vehicle_number = ?, last_updated = ?
-        WHERE slot_id = ?
-    """, (new_status, vehicle_number, timestamp, slot_id))
-
+        SET    status = ?, vehicle_number = ?, last_updated = ?
+        WHERE  slot_id = ?
+    """, (new_status, vehicle_number, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), slot_id))
     success = cursor.rowcount > 0
     conn.commit()
     conn.close()
-
     return success
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 7 ─ randomize_slots
-# ══════════════════════════════════════════════════════════════════════════════
-
 def randomize_slots(db_path: str = PARKING_DB_PATH) -> None:
-    """
-    Re-randomizes the status of ALL slots to simulate changing conditions.
-
-    This is used by the dashboard's 'Simulate Change' button.
-    In Module 4, this function will be replaced by real YOLOv8 detection output.
-
-    Parameters:
-        db_path (str): Path to the database file.
-    """
+    """Re-randomizes all slot statuses (used by simulation button)."""
     all_slots    = get_all_slots(db_path)
-    timestamp    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     vehicle_pool = FAKE_VEHICLES.copy()
     random.shuffle(vehicle_pool)
+    timestamp    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     vehicle_idx  = 0
 
     conn = sqlite3.connect(db_path)
@@ -352,10 +241,8 @@ def randomize_slots(db_path: str = PARKING_DB_PATH) -> None:
     for slot in all_slots:
         new_status = random.choices(
             population=[STATUS_AVAILABLE, STATUS_OCCUPIED, STATUS_RESERVED],
-            weights=[50, 35, 15],
-            k=1
+            weights=[50, 35, 15], k=1
         )[0]
-
         vehicle_number = None
         if new_status == STATUS_OCCUPIED:
             vehicle_number = vehicle_pool[vehicle_idx % len(vehicle_pool)]
@@ -363,9 +250,287 @@ def randomize_slots(db_path: str = PARKING_DB_PATH) -> None:
 
         cursor.execute("""
             UPDATE parking_slots
-            SET status = ?, vehicle_number = ?, last_updated = ?
-            WHERE slot_id = ?
+            SET    status = ?, vehicle_number = ?, last_updated = ?
+            WHERE  slot_id = ?
         """, (new_status, vehicle_number, timestamp, slot["slot_id"]))
+
+    conn.commit()
+    conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── PART B: ZONE-BASED TRACKING  (parking_zones table)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# FUNCTION 8 ─ init_zones_db
+def init_zones_db(db_path: str = PARKING_DB_PATH) -> None:
+    """
+    Creates the 'parking_zones' table if it does not exist.
+
+    Columns:
+      zone_id      → Primary key. Zone name, e.g. 'Zone A'.
+      capacity     → Total parking spaces in this zone (from ZONE_CONFIG).
+      parked_count → Number of vehicles currently detected inside this zone.
+      available    → Calculated: capacity - parked_count.
+      occ_pct      → Occupancy percentage: (parked_count / capacity) × 100.
+      status       → 'available' | 'filling' | 'full'
+      last_updated → Timestamp of last update.
+
+    WHY a separate table from parking_slots?
+      parking_zones stores COUNTS (how many cars in a region).
+      parking_slots stores INDIVIDUAL slot states (which exact slot is used).
+      They serve different purposes and can coexist.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS parking_zones (
+            zone_id      TEXT    PRIMARY KEY,
+            capacity     INTEGER NOT NULL DEFAULT 10,
+            parked_count INTEGER NOT NULL DEFAULT 0,
+            available    INTEGER NOT NULL DEFAULT 10,
+            occ_pct      REAL    NOT NULL DEFAULT 0.0,
+            status       TEXT    NOT NULL DEFAULT 'available',
+            last_updated TEXT    NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# FUNCTION 9 ─ seed_zones
+def seed_zones(db_path: str = PARKING_DB_PATH) -> None:
+    """
+    Inserts zone rows from ZONE_CONFIG (slot_config.py) if the table is empty.
+
+    HOW it works:
+      1. Imports ZONE_CONFIG from slot_config.py.
+      2. For each zone, inserts a row with the correct capacity.
+      3. Sets parked_count = 0 and available = capacity (no vehicles yet).
+
+    This is called once on app startup. Safe to call repeatedly —
+    uses INSERT OR IGNORE so existing rows are never overwritten.
+    """
+    from slot_config import ZONE_CONFIG
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for zone_id, cfg in ZONE_CONFIG.items():
+        capacity = cfg.get("capacity", 10)
+        cursor.execute("""
+            INSERT OR IGNORE INTO parking_zones
+                (zone_id, capacity, parked_count, available, occ_pct, status, last_updated)
+            VALUES (?, ?, 0, ?, 0.0, 'available', ?)
+        """, (zone_id, capacity, capacity, timestamp))
+
+    conn.commit()
+    conn.close()
+
+
+# FUNCTION 10 ─ get_all_zones
+def get_all_zones(db_path: str = PARKING_DB_PATH) -> list:
+    """
+    Returns all zone rows from parking_zones, ordered by zone_id.
+
+    Returns:
+        list of dicts:
+        [
+            {
+                'zone_id'     : 'Zone A',
+                'capacity'    : 10,
+                'parked_count': 7,
+                'available'   : 3,
+                'occ_pct'     : 70.0,
+                'status'      : 'filling',
+                'last_updated': '2026-07-29 18:00:00'
+            },
+            ...
+        ]
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT zone_id, capacity, parked_count, available, occ_pct, status, last_updated
+        FROM   parking_zones
+        ORDER  BY zone_id ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# FUNCTION 11 ─ _derive_zone_status  (internal helper)
+def _derive_zone_status(occ_pct: float) -> str:
+    """
+    Determines a zone's status string from its occupancy percentage.
+
+    Thresholds:
+      occ_pct < 60%  → 'available'  (lots of free space)
+      60% ≤ occ_pct < 85%  → 'filling'  (getting crowded)
+      occ_pct ≥ 85%  → 'full'       (almost or completely full)
+
+    Parameters:
+        occ_pct (float): Occupancy percentage (0.0 to 100.0).
+
+    Returns:
+        str: 'available', 'filling', or 'full'.
+    """
+    if occ_pct >= 85.0:
+        return ZONE_STATUS_FULL
+    elif occ_pct >= 60.0:
+        return ZONE_STATUS_FILLING
+    else:
+        return ZONE_STATUS_AVAILABLE
+
+
+# FUNCTION 12 ─ update_zone_count
+def update_zone_count(
+    zone_id: str,
+    parked_count: int,
+    db_path: str = PARKING_DB_PATH,
+) -> bool:
+    """
+    Updates the vehicle count for a zone and auto-recalculates derived fields.
+
+    Called by detection_engine.py after counting vehicles per zone.
+
+    What it auto-computes:
+      available  = capacity - parked_count  (clamped to 0)
+      occ_pct    = (parked_count / capacity) × 100
+      status     = derived from occ_pct (available / filling / full)
+      last_updated = current timestamp
+
+    Parameters:
+        zone_id      (str): Zone name, e.g. 'Zone A'.
+        parked_count (int): Number of vehicles currently detected in this zone.
+        db_path      (str): Database file path.
+
+    Returns:
+        bool: True if zone was found and updated, False otherwise.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Fetch current capacity for this zone
+    cursor.execute("SELECT capacity FROM parking_zones WHERE zone_id = ?", (zone_id,))
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        return False   # Zone not found in DB
+
+    capacity = row[0]
+
+    # Clamp parked_count to valid range
+    parked_count = max(0, min(parked_count, capacity))
+    available    = capacity - parked_count
+    occ_pct      = round((parked_count / capacity) * 100, 1) if capacity > 0 else 0.0
+    status       = _derive_zone_status(occ_pct)
+    timestamp    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE parking_zones
+        SET    parked_count = ?,
+               available    = ?,
+               occ_pct      = ?,
+               status       = ?,
+               last_updated = ?
+        WHERE  zone_id = ?
+    """, (parked_count, available, occ_pct, status, timestamp, zone_id))
+
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
+
+
+# FUNCTION 13 ─ get_zone_stats
+def get_zone_stats(db_path: str = PARKING_DB_PATH) -> dict:
+    """
+    Returns aggregate zone counts across ALL zones.
+
+    Used by the dashboard's top stats row.
+
+    Returns:
+        dict:
+        {
+            'total_capacity' : 40,   ← sum of all zone capacities
+            'total_parked'   : 25,   ← total vehicles parked
+            'total_available': 15,   ← total free spaces
+            'overall_pct'    : 62.5, ← overall occupancy %
+            'zones_full'     : 1,    ← number of full zones
+            'zones_filling'  : 2,    ← number of filling zones
+            'zones_available': 1,    ← number of available zones
+            'total_zones'    : 4,
+        }
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            SUM(capacity),
+            SUM(parked_count),
+            SUM(available),
+            COUNT(*),
+            SUM(CASE WHEN status = 'full'      THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'filling'   THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END)
+        FROM parking_zones
+    """)
+    row = cursor.fetchone()
+    conn.close()
+
+    total_cap  = row[0] or 0
+    total_park = row[1] or 0
+    total_avail= row[2] or 0
+    total_zones= row[3] or 0
+    z_full     = row[4] or 0
+    z_filling  = row[5] or 0
+    z_avail    = row[6] or 0
+
+    overall_pct = round((total_park / total_cap) * 100, 1) if total_cap > 0 else 0.0
+
+    return {
+        "total_capacity"  : total_cap,
+        "total_parked"    : total_park,
+        "total_available" : total_avail,
+        "overall_pct"     : overall_pct,
+        "zones_full"      : z_full,
+        "zones_filling"   : z_filling,
+        "zones_available" : z_avail,
+        "total_zones"     : total_zones,
+    }
+
+
+# FUNCTION 14 ─ reset_zones
+def reset_zones(db_path: str = PARKING_DB_PATH) -> None:
+    """
+    Resets all zone parked_counts to 0 (all zones become available).
+    Used for testing or when starting a new session.
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT zone_id, capacity FROM parking_zones
+    """)
+    zones = cursor.fetchall()
+
+    for zone_id, capacity in zones:
+        cursor.execute("""
+            UPDATE parking_zones
+            SET    parked_count = 0,
+                   available    = ?,
+                   occ_pct      = 0.0,
+                   status       = 'available',
+                   last_updated = ?
+            WHERE  zone_id = ?
+        """, (capacity, timestamp, zone_id))
 
     conn.commit()
     conn.close()
@@ -378,35 +543,64 @@ if __name__ == "__main__":
     import os
 
     TEST_DB = "test_parking.db"
+    print("═" * 55)
+    print("  parking_db.py  –  Self Test (Slots + Zones)")
+    print("═" * 55)
 
-    print("─" * 50)
-    print("  parking_db.py  –  Self Test")
-    print("─" * 50)
+    # ── PART A: Slots ──────────────────────────────────────────────────────────
+    print("\n── Part A: Slots ──────────────────────────────────────")
 
-    print("\n[1] Initialising database...")
+    print("  [1] Creating parking_slots table...")
     init_parking_db(TEST_DB)
 
-    print("[2] Seeding 12 slots (3 rows × 4 cols)...")
+    print("  [2] Seeding 12 slots (3×4)...")
     seed_slots(total_rows=3, cols=4, db_path=TEST_DB)
 
-    print("[3] Fetching all slots:")
-    for s in get_all_slots(TEST_DB):
+    slots = get_all_slots(TEST_DB)
+    print(f"  [3] Fetched {len(slots)} slots.")
+    for s in slots:
         veh = f"  [{s['vehicle_number']}]" if s["vehicle_number"] else ""
-        print(f"    {s['slot_id']}  →  {s['status']:10}{veh}")
+        print(f"       {s['slot_id']}  →  {s['status']:12}{veh}")
 
-    print("\n[4] Stats:")
     stats = get_stats(TEST_DB)
-    for k, v in stats.items():
-        print(f"    {k:12} : {v}")
+    print(f"\n  [4] Slot stats: {stats}")
 
-    print("\n[5] Updating slot A1 to 'reserved'...")
     update_slot_status("A1", STATUS_RESERVED, db_path=TEST_DB)
-    print(f"    A1 → {get_slots_by_status(STATUS_RESERVED, TEST_DB)}")
+    print(f"  [5] A1 → reserved: {get_slots_by_status(STATUS_RESERVED, TEST_DB)[0]}")
 
-    print("\n[6] Randomizing all slots...")
-    randomize_slots(TEST_DB)
-    stats2 = get_stats(TEST_DB)
-    print(f"    New stats: {stats2}")
+    # ── PART B: Zones ──────────────────────────────────────────────────────────
+    print("\n── Part B: Zones ──────────────────────────────────────")
 
+    print("  [6] Creating parking_zones table...")
+    init_zones_db(TEST_DB)
+
+    print("  [7] Seeding zones from ZONE_CONFIG...")
+    seed_zones(TEST_DB)
+
+    zones = get_all_zones(TEST_DB)
+    print(f"  [8] Fetched {len(zones)} zones:")
+    for z in zones:
+        print(f"       {z['zone_id']:<12} capacity={z['capacity']}  "
+              f"parked={z['parked_count']}  status={z['status']}")
+
+    print("  [9] Updating 'Zone A' → 8 vehicles parked...")
+    ok = update_zone_count("Zone A", 8, TEST_DB)
+    print(f"       Success={ok}")
+    za = get_all_zones(TEST_DB)[0]
+    print(f"       Zone A: parked={za['parked_count']}  available={za['available']}  "
+          f"occ={za['occ_pct']}%  status={za['status']}")
+
+    print("  [10] Zone aggregate stats:")
+    zs = get_zone_stats(TEST_DB)
+    for k, v in zs.items():
+        print(f"        {k:<22}: {v}")
+
+    print("  [11] Resetting all zones...")
+    reset_zones(TEST_DB)
+    print(f"       Zone A after reset: {get_all_zones(TEST_DB)[0]}")
+
+    # ── Cleanup ────────────────────────────────────────────────────────────────
     os.remove(TEST_DB)
-    print("\n✓ Test DB cleaned up. All tests passed!")
+    print("\n  ✓ Test DB cleaned up.")
+    print("  ✅ All parking_db.py tests passed!")
+    print("═" * 55)

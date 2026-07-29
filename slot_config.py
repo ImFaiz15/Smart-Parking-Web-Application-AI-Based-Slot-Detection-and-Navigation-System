@@ -1,72 +1,56 @@
 """
-slot_config.py  –  Parking Slot Coordinate Configuration (Module 4)
+slot_config.py  –  Parking Slot & Zone Coordinate Configuration (Module 4)
 ─────────────────────────────────────────────────────────────────────────────
-This file defines WHERE each parking slot is located on the image.
+This file defines WHERE each parking slot / zone is located on the image.
 
-WHY is this needed?
-  YOLOv8 tells us WHERE vehicles are detected in the image (bounding boxes).
-  But it does NOT know which vehicle belongs to which parking slot.
-  We need a "map" that says: "Slot A1 is in THIS region of the image."
-  ai_detector.py then checks if a detected vehicle overlaps that region.
+SECTION 1  →  Detection thresholds (confidence, overlap)
+SECTION 2  →  SLOT_COORDINATES  (individual slot boxes — kept for compatibility)
+SECTION 3  →  ZONE_CONFIG       (zone boxes with capacity — used by Phase 4+)
+SECTION 4  →  Helper functions for both slots and zones
 
-HOW coordinates work:
-  All slot positions are stored as RELATIVE fractions (0.0 to 1.0).
-  This means they are a percentage of the image width/height.
+HOW ZONE coordinates work:
+  All positions are stored as RELATIVE fractions (0.0 to 1.0).
+  This means they are percentages of the image width/height.
 
   Example:
-      "A1": [0.02, 0.05, 0.24, 0.28]
-       ↑ x1=2%   ↑ y1=5%   ↑ x2=24%  ↑ y2=28%
-       of image width        of image height
+      "Zone A": {"coords": [0.02, 0.05, 0.48, 0.45], "capacity": 10}
+       x1=2%   y1=5%   x2=48%  y2=45%  of the image
 
-  To convert to actual pixel coordinates at runtime:
-      x1_px = x1_fraction × image_width
-      y1_px = y1_fraction × image_height
+  WHY fractions?
+    Fractions work on ANY image resolution.
+    Pixels would break if the image is resized or camera changes.
 
-  WHY fractions instead of pixels?
-    Fractions work on any image resolution.
-    Pixels would break if the image is resized.
-
-HOW to adjust for your own parking lot image:
-  1. Open your parking lot image in any image viewer.
-  2. Note the total width (W) and height (H) in pixels.
-  3. For each slot, identify its top-left and bottom-right corners.
-  4. Calculate: x1 = corner_x / W,  y1 = corner_y / H
-  5. Update the SLOT_COORDINATES dictionary below.
+HOW to update ZONE_CONFIG:
+  Run:  python draw_slots.py
+  Click + drag rectangles on your parking image.
+  Enter zone name + capacity. Press S to save.
+  draw_slots.py will rewrite the ZONE_CONFIG block below automatically.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 1 ─ THRESHOLDS
+# SECTION 1 ─ DETECTION THRESHOLDS
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Minimum fraction of a slot that must be covered by a vehicle
-# for it to be considered OCCUPIED.
-#
-# Example: OVERLAP_THRESHOLD = 0.15 means:
-#   If a vehicle covers ≥ 15% of a slot's area → slot is OCCUPIED
-#   If a vehicle covers  < 15% of a slot's area → slot is AVAILABLE
-#
-# Tune this value based on your image:
-#   Lower (0.10) → more sensitive, marks slots occupied more easily
-#   Higher (0.25) → less sensitive, needs more overlap to mark occupied
+# Minimum fraction of a slot that must be covered by a vehicle bounding box
+# for it to be considered OCCUPIED. (Used by slot-by-slot detection.)
+# Lower  (0.10) → more sensitive  | Higher (0.25) → less sensitive
 OVERLAP_THRESHOLD = 0.15
 
 # Minimum YOLO confidence score to accept a vehicle detection.
-# Detections below this score are ignored (considered noise/false positives).
-#   0.35 = YOLO must be at least 35% confident it detected a vehicle.
+# Detections below this value are treated as false positives.
 YOLO_CONFIDENCE = 0.35
 
 # YOLOv8 model file to use.
-# 'best.pt'    = YOUR custom-trained model (placed in project root)
-# 'yolov8n.pt' = Nano pretrained (fallback if best.pt is missing)
+# 'best.pt'    = YOUR custom-trained model (in project root)
+# 'yolov8n.pt' = Nano pretrained (auto-downloaded as fallback)
 MODEL_PATH = "best.pt"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 ─ SLOT COORDINATES
+# SECTION 2 ─ SLOT_COORDINATES  (kept for backward compatibility)
 # ══════════════════════════════════════════════════════════════════════════════
-#
-# Layout (12 slots, 3 rows × 4 columns):
+# Layout (12 individual slots, 3 rows × 4 columns):
 #
 #   ┌──────────────────────────────────────────────────────────────┐
 #   │  [A1]      [A2]      [A3]      [A4]       ← Row A (top)      │
@@ -76,25 +60,22 @@ MODEL_PATH = "best.pt"
 #   │  [C1]      [C2]      [C3]      [C4]       ← Row C (bottom)   │
 #   └──────────────────────────────────────────────────────────────┘
 #
-# Each value is [x1, y1, x2, y2] as fractions of the image dimensions.
-# These defaults are set for a standard top-down parking lot view.
-# ──────────────────────────────────────────────────────────────────────────────
+# Values: [x1, y1, x2, y2] as fractions of image dimensions (0.0 to 1.0)
 
 SLOT_COORDINATES: dict = {
-
-    # ── Row A (top region: y from 5% to 28% of image height) ──────────────────
+    # Row A — top region (y: 5% to 28%)
     "A1": [0.02, 0.05, 0.23, 0.28],
     "A2": [0.27, 0.05, 0.48, 0.28],
     "A3": [0.52, 0.05, 0.73, 0.28],
     "A4": [0.77, 0.05, 0.98, 0.28],
 
-    # ── Row B (middle region: y from 38% to 62% of image height) ──────────────
+    # Row B — middle region (y: 38% to 62%)
     "B1": [0.02, 0.38, 0.23, 0.62],
     "B2": [0.27, 0.38, 0.48, 0.62],
     "B3": [0.52, 0.38, 0.73, 0.62],
     "B4": [0.77, 0.38, 0.98, 0.62],
 
-    # ── Row C (bottom region: y from 72% to 95% of image height) ─────────────
+    # Row C — bottom region (y: 72% to 95%)
     "C1": [0.02, 0.72, 0.23, 0.95],
     "C2": [0.27, 0.72, 0.48, 0.95],
     "C3": [0.52, 0.72, 0.73, 0.95],
@@ -103,31 +84,59 @@ SLOT_COORDINATES: dict = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 ─ HELPER FUNCTIONS
+# SECTION 3 ─ ZONE_CONFIG  (Zone-based tracking — Phase 4)
+# ══════════════════════════════════════════════════════════════════════════════
+# These are DEFAULT zones. Run  python draw_slots.py  to replace them
+# with zones drawn on YOUR actual parking image.
+#
+# Each zone covers a REGION of the parking lot.
+# The detection engine counts how many vehicles are inside each region.
+#
+# Format:
+#   "Zone Name": {
+#       "coords"  : [x1, y1, x2, y2],   ← relative fractions (0.0 to 1.0)
+#       "capacity": N,                   ← total parking spaces in this zone
+#   }
+
+ZONE_CONFIG: dict = {
+    "Zone A": {
+        "coords"  : [0.02, 0.02, 0.49, 0.49],
+        "capacity": 6,
+    },
+    "Zone B": {
+        "coords"  : [0.51, 0.02, 0.98, 0.49],
+        "capacity": 6,
+    },
+    "Zone C": {
+        "coords"  : [0.02, 0.51, 0.49, 0.98],
+        "capacity": 6,
+    },
+    "Zone D": {
+        "coords"  : [0.51, 0.51, 0.98, 0.98],
+        "capacity": 6,
+    },
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 ─ HELPER FUNCTIONS (Slots)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_absolute_coords(slot_id: str, image_width: int, image_height: int) -> list:
     """
-    Converts the relative (fraction) slot coordinates to absolute pixel coordinates.
-
-    WHY convert?
-      OpenCV draws rectangles using pixel coordinates (integers), not fractions.
-      So [0.02, 0.05, 0.23, 0.28] must become [16, 28, 184, 157] (for a 720×560 image).
+    Converts relative slot coordinates → absolute pixel coordinates.
 
     Parameters:
-        slot_id      (str): Slot label like 'A1', 'B3'.
-        image_width  (int): Width  of the image in pixels.
-        image_height (int): Height of the image in pixels.
+        slot_id      (str): e.g. 'A1', 'B3'
+        image_width  (int): Image width in pixels.
+        image_height (int): Image height in pixels.
 
     Returns:
-        list: [x1, y1, x2, y2] in absolute pixels, or None if slot_id not found.
+        list: [x1, y1, x2, y2] in pixels, or None if slot_id not found.
     """
     if slot_id not in SLOT_COORDINATES:
         return None
-
     x1f, y1f, x2f, y2f = SLOT_COORDINATES[slot_id]
-
-    # Multiply fraction by image dimension and round to nearest integer
     return [
         int(x1f * image_width),
         int(y1f * image_height),
@@ -137,54 +146,95 @@ def get_absolute_coords(slot_id: str, image_width: int, image_height: int) -> li
 
 
 def get_all_absolute_coords(image_width: int, image_height: int) -> dict:
-    """
-    Returns a dictionary of ALL slot IDs mapped to their absolute pixel coordinates.
-
-    Used by ai_detector.py to iterate over all slots during detection.
-
-    Parameters:
-        image_width  (int): Width  of the image in pixels.
-        image_height (int): Height of the image in pixels.
-
-    Returns:
-        dict: { 'A1': [x1, y1, x2, y2], 'A2': [...], ... }
-    """
+    """Returns all slot IDs → absolute pixel coords."""
     return {
-        slot_id: get_absolute_coords(slot_id, image_width, image_height)
-        for slot_id in SLOT_COORDINATES
+        sid: get_absolute_coords(sid, image_width, image_height)
+        for sid in SLOT_COORDINATES
     }
 
 
 def list_slot_ids() -> list:
+    """Returns sorted list of all individual slot IDs."""
+    return sorted(SLOT_COORDINATES.keys())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 ─ HELPER FUNCTIONS (Zones)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def list_zone_ids() -> list:
+    """Returns sorted list of all zone names from ZONE_CONFIG."""
+    return sorted(ZONE_CONFIG.keys())
+
+
+def get_zone_absolute_coords(zone_id: str, image_width: int, image_height: int) -> list:
     """
-    Returns a sorted list of all configured slot IDs.
+    Converts relative zone coords → absolute pixel coords.
+
+    Parameters:
+        zone_id      (str): Zone name, e.g. 'Zone A'.
+        image_width  (int): Image width in pixels.
+        image_height (int): Image height in pixels.
 
     Returns:
-        list: e.g. ['A1', 'A2', 'A3', 'A4', 'B1', ...]
+        list: [x1, y1, x2, y2] in pixels, or None if zone not found.
     """
-    return sorted(SLOT_COORDINATES.keys())
+    if zone_id not in ZONE_CONFIG:
+        return None
+    x1f, y1f, x2f, y2f = ZONE_CONFIG[zone_id]["coords"]
+    return [
+        int(x1f * image_width),
+        int(y1f * image_height),
+        int(x2f * image_width),
+        int(y2f * image_height),
+    ]
+
+
+def get_all_zone_absolute_coords(image_width: int, image_height: int) -> dict:
+    """Returns all zone IDs → absolute pixel coords."""
+    return {
+        zid: get_zone_absolute_coords(zid, image_width, image_height)
+        for zid in ZONE_CONFIG
+    }
+
+
+def get_zone_capacity(zone_id: str) -> int:
+    """Returns the capacity of a zone, or 0 if not found."""
+    return ZONE_CONFIG.get(zone_id, {}).get("capacity", 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SELF-TEST BLOCK
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    print("─" * 55)
+    print("─" * 60)
     print("  slot_config.py  –  Self Test")
-    print("─" * 55)
+    print("─" * 60)
 
-    # Simulate a 1280 × 720 pixel image
     W, H = 1280, 720
 
-    print(f"\nImage size: {W} × {H} pixels\n")
-    print(f"{'Slot ID':<10} {'Relative':<28} {'Absolute (px)'}")
-    print("─" * 55)
+    print(f"\n  Image size: {W} × {H} px\n")
 
-    for slot_id in list_slot_ids():
-        rel  = SLOT_COORDINATES[slot_id]
-        abso = get_absolute_coords(slot_id, W, H)
-        print(f"  {slot_id:<8} {str(rel):<28} {abso}")
+    print("  ── Individual Slots ──────────────────────────────────")
+    print(f"  {'Slot':<8} {'Relative':<32} {'Absolute (px)'}")
+    print("  " + "─" * 55)
+    for sid in list_slot_ids():
+        rel  = SLOT_COORDINATES[sid]
+        abso = get_absolute_coords(sid, W, H)
+        print(f"  {sid:<8} {str(rel):<32} {abso}")
 
-    print(f"\nTotal slots configured: {len(SLOT_COORDINATES)}")
-    print(f"Overlap threshold     : {OVERLAP_THRESHOLD} ({OVERLAP_THRESHOLD*100:.0f}%)")
-    print(f"YOLO confidence       : {YOLO_CONFIDENCE} ({YOLO_CONFIDENCE*100:.0f}%)")
+    print(f"\n  ── Zones ────────────────────────────────────────────")
+    print(f"  {'Zone':<12} {'Capacity':<10} {'Relative Coords':<36} {'Absolute (px)'}")
+    print("  " + "─" * 70)
+    for zid in list_zone_ids():
+        cap  = get_zone_capacity(zid)
+        rel  = ZONE_CONFIG[zid]["coords"]
+        abso = get_zone_absolute_coords(zid, W, H)
+        print(f"  {zid:<12} {cap:<10} {str(rel):<36} {abso}")
+
+    print(f"\n  Total slots : {len(SLOT_COORDINATES)}")
+    print(f"  Total zones : {len(ZONE_CONFIG)}")
+    print(f"  Total zone capacity: {sum(z['capacity'] for z in ZONE_CONFIG.values())}")
+    print(f"  YOLO confidence  : {YOLO_CONFIDENCE}")
+    print(f"  Overlap threshold: {OVERLAP_THRESHOLD}")
+    print(f"  Model path       : {MODEL_PATH}")
