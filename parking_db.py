@@ -329,7 +329,52 @@ def seed_zones(db_path: str = PARKING_DB_PATH) -> None:
     conn.close()
 
 
-# FUNCTION 10 ─ get_all_zones
+# FUNCTION 10 (NEW) ─ sync_zones_from_config
+def sync_zones_from_config(db_path: str = PARKING_DB_PATH) -> None:
+    """
+    Wipes ALL existing rows in parking_zones and re-inserts fresh rows
+    from ZONE_CONFIG in slot_config.py.
+
+    WHY wipe instead of INSERT OR IGNORE?
+      INSERT OR IGNORE keeps OLD zones that no longer exist in ZONE_CONFIG.
+      If you rename a zone in slot_config.py or run draw_slots.py to create
+      new zones, the old stale rows would stay in the DB forever.
+      sync_zones_from_config() guarantees the DB always matches the config.
+
+    SAFETY:
+      It resets parked_count=0 and available=capacity for all zones.
+      This is intentional — the detection engine will repopulate counts
+      on the next frame. It does NOT touch the parking_slots table.
+
+    Parameters:
+        db_path (str): Path to the SQLite database file.
+
+    Called by:
+        app.py  main()  →  on every Streamlit startup / refresh.
+    """
+    from slot_config import ZONE_CONFIG
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Step 1: Remove ALL existing zone rows (wipe old/stale data)
+    cursor.execute("DELETE FROM parking_zones")
+
+    # Step 2: Re-insert one row per zone from ZONE_CONFIG
+    for zone_id, cfg in ZONE_CONFIG.items():
+        capacity = cfg.get("capacity", 1)
+        cursor.execute("""
+            INSERT INTO parking_zones
+                (zone_id, capacity, parked_count, available, occ_pct, status, last_updated)
+            VALUES (?, ?, 0, ?, 0.0, 'available', ?)
+        """, (zone_id, capacity, capacity, timestamp))
+
+    conn.commit()
+    conn.close()
+
+
+# FUNCTION 11 ─ get_all_zones
 def get_all_zones(db_path: str = PARKING_DB_PATH) -> list:
     """
     Returns all zone rows from parking_zones, ordered by zone_id.

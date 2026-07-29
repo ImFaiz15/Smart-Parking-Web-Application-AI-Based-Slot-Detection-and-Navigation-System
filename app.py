@@ -30,7 +30,7 @@ from parking_db import (
     init_parking_db,
     init_zones_db,
     seed_slots,
-    seed_zones,
+    sync_zones_from_config,
     get_all_zones,
     get_zone_stats,
     ZONE_STATUS_AVAILABLE,
@@ -625,13 +625,14 @@ def main() -> None:
     # ── Step 1: CSS ─────────────────────────────────────────────────────────────
     apply_styles()
 
-    # ── Step 2 & 3: Ensure DB tables + seed zones ───────────────────────────────
-    # All init / seed functions use CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE
-    # → completely safe to call on every refresh. Never overwrites existing data.
+    # ── Step 2 & 3: Ensure DB tables + sync zones from config ───────────────────
+    # init_parking_db() / init_zones_db() use CREATE TABLE IF NOT EXISTS → safe.
+    # sync_zones_from_config() WIPES parking_zones and re-inserts from ZONE_CONFIG
+    # so the dashboard always reflects the exact zones in slot_config.py.
     init_parking_db()
     init_zones_db()
     seed_slots(total_rows=3, cols=4)
-    seed_zones()
+    sync_zones_from_config()   # <-- always syncs with slot_config.ZONE_CONFIG
 
     # ── Step 4: Fetch aggregate zone stats ──────────────────────────────────────
     zone_stats = get_zone_stats()
