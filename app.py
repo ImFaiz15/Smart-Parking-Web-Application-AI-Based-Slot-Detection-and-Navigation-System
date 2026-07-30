@@ -29,8 +29,7 @@ import streamlit as st
 from parking_db import (
     init_parking_db,
     init_zones_db,
-    seed_slots,
-    sync_zones_from_config,
+    ensure_zones_exist,
     get_all_zones,
     get_zone_stats,
     ZONE_STATUS_AVAILABLE,
@@ -40,7 +39,7 @@ from parking_db import (
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 GRID_COLUMNS    = 4     # Zone cards per row
-REFRESH_SECONDS = 5     # Default auto-refresh interval
+REFRESH_SECONDS = 2     # Default auto-refresh interval (2s = near real-time)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -576,7 +575,7 @@ def render_zone_table(zones: list) -> None:
             "Status"    : [status_label(z["status"])      for z in zones],
             "Updated"   : [z["last_updated"]              for z in zones],
         }
-        st.dataframe(table_data, use_container_width=True, hide_index=True)
+        st.dataframe(table_data, width="stretch", hide_index=True)
         st.caption(
             f"📁 Source: parking.db → parking_zones  •  "
             f"{len(zones)} zone(s)  •  "
@@ -625,14 +624,13 @@ def main() -> None:
     # ── Step 1: CSS ─────────────────────────────────────────────────────────────
     apply_styles()
 
-    # ── Step 2 & 3: Ensure DB tables + sync zones from config ───────────────────
-    # init_parking_db() / init_zones_db() use CREATE TABLE IF NOT EXISTS → safe.
-    # sync_zones_from_config() WIPES parking_zones and re-inserts from ZONE_CONFIG
-    # so the dashboard always reflects the exact zones in slot_config.py.
+    # ── Step 2 & 3: Ensure DB tables exist (non-destructive) ──────────────────
+    # CREATE TABLE IF NOT EXISTS → never drops existing data.
+    # ensure_zones_exist() uses INSERT OR IGNORE → NEVER wipes live parked counts.
+    # This means detection_engine.py counts are preserved across every rerun.
     init_parking_db()
     init_zones_db()
-    seed_slots(total_rows=3, cols=4)
-    sync_zones_from_config()   # <-- always syncs with slot_config.ZONE_CONFIG
+    ensure_zones_exist()   # NON-DESTRUCTIVE: only adds missing zones, never resets counts
 
     # ── Step 4: Fetch aggregate zone stats ──────────────────────────────────────
     zone_stats = get_zone_stats()

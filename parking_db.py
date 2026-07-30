@@ -374,6 +374,46 @@ def sync_zones_from_config(db_path: str = PARKING_DB_PATH) -> None:
     conn.close()
 
 
+# FUNCTION 10b ─ ensure_zones_exist  (NON-DESTRUCTIVE — safe to call every startup)
+def ensure_zones_exist(db_path: str = PARKING_DB_PATH) -> None:
+    """
+    Adds any MISSING zones from ZONE_CONFIG into parking_zones.
+    Uses INSERT OR IGNORE — never touches rows that already exist.
+
+    KEY DIFFERENCE from sync_zones_from_config():
+      sync_zones_from_config()  →  WIPES all rows first, resets counts to 0.
+      ensure_zones_exist()      →  Only INSERTs missing rows. Leaves live
+                                   parked_count values completely UNTOUCHED.
+
+    WHEN to use each:
+      ensure_zones_exist()      →  Called by app.py and detection_engine.py
+                                   on every startup so the DB always has the
+                                   right zones but NEVER resets live counts.
+      sync_zones_from_config()  →  Only call manually (e.g., a Reset button)
+                                   when you want a clean slate.
+
+    Parameters:
+        db_path (str): Path to the SQLite database file.
+    """
+    from slot_config import ZONE_CONFIG
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for zone_id, cfg in ZONE_CONFIG.items():
+        capacity = cfg.get("capacity", 1)
+        # INSERT OR IGNORE → skips the row entirely if zone_id already exists
+        cursor.execute("""
+            INSERT OR IGNORE INTO parking_zones
+                (zone_id, capacity, parked_count, available, occ_pct, status, last_updated)
+            VALUES (?, ?, 0, ?, 0.0, 'available', ?)
+        """, (zone_id, capacity, capacity, timestamp))
+
+    conn.commit()
+    conn.close()
+
+
 # FUNCTION 11 ─ get_all_zones
 def get_all_zones(db_path: str = PARKING_DB_PATH) -> list:
     """

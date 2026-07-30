@@ -56,7 +56,7 @@ from parking_db import (
     init_parking_db,
     init_zones_db,
     seed_slots,
-    seed_zones,
+    ensure_zones_exist,
     update_zone_count,
     get_all_zones,
     get_zone_stats,
@@ -602,7 +602,7 @@ def main():
     init_parking_db()
     init_zones_db()
     seed_slots(total_rows=3, cols=4)
-    seed_zones()
+    ensure_zones_exist()   # NON-DESTRUCTIVE: adds missing zones, never resets counts
     print_zone_status()
 
     # ── Load model ─────────────────────────────────────────────────────────────
