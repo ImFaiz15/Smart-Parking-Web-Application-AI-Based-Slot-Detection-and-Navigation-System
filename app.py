@@ -21,8 +21,10 @@ Run:
 ─────────────────────────────────────────────────────────────────────────────
 """
 
+import os
 import time
 from datetime import datetime
+from pathlib import Path
 import streamlit as st
 
 # ── Database imports ───────────────────────────────────────────────────────────
@@ -456,77 +458,124 @@ def render_summary_stats(zone_stats: dict) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 ─ ZONE GRID
+# SECTION 7 ─ ZONE MODAL  +  ZONE GRID
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Folder where detection_engine.py saves zone crop images
+_ZONES_CROP_DIR = Path(__file__).parent / "static" / "zones"
+
+
+@st.dialog("Zone Detail", width="large")
+def show_zone_modal(zone: dict) -> None:
+    """
+    Modal popup for one zone.
+    Shows the live annotated crop from detection_engine + live metrics.
+
+    Parameters:
+        zone (dict): A single row from get_all_zones().
+    """
+    zone_id   = zone.get("zone_id",      "?")
+    capacity  = zone.get("capacity",      0)
+    parked    = zone.get("parked_count",  0)
+    available = zone.get("available",     0)
+    occ_pct   = zone.get("occ_pct",      0.0)
+    status    = zone.get("status",        ZONE_STATUS_AVAILABLE)
+    updated   = zone.get("last_updated",  "—")
+
+    # Header
+    st.markdown(
+        f"<h2 style='margin:0 0 12px 0;'>&#x1F4CD; Zone {zone_id} &mdash; Live Visual Feed</h2>",
+        unsafe_allow_html=True,
+    )
+
+    # Cropped zone image
+    crop_path = _ZONES_CROP_DIR / f"{zone_id}.jpg"
+    if crop_path.exists():
+        st.image(
+            str(crop_path),
+            caption=f"Zone {zone_id} — annotated by detection engine",
+            width="stretch",
+        )
+    else:
+        st.info(
+            f"No snapshot yet for Zone {zone_id}.  "
+            "Run `python detection_engine.py --source my_parking.jpg` "
+            "to generate live zone images."
+        )
+
+    st.markdown("---")
+
+    # Live metrics row
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Capacity", capacity)
+    m2.metric("Occupied",       parked)
+    m3.metric("Free Spaces",    available)
+    m4.metric("Occupancy",      f"{occ_pct:.1f}%")
+
+    # Occupancy bar
+    bar_color = (
+        "#ef4444" if status == ZONE_STATUS_FULL else
+        "#f59e0b" if status == ZONE_STATUS_FILLING else
+        "#22c55e"
+    )
+    bar_w = min(max(occ_pct, 0.0), 100.0)
+    st.markdown(
+        f"<div style='margin:12px 0 4px 0; font-size:0.8rem; color:#94a3b8;'>Occupancy</div>"
+        f"<div style='background:#1e293b; border-radius:6px; height:14px; overflow:hidden;'>"
+        f"<div style='width:{bar_w:.1f}%; height:100%; background:{bar_color}; border-radius:6px;'></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(f"&#x1F552; Last sync: {updated}")
+
 
 def render_zone_grid(zones: list) -> None:
     """
-    Renders the main zone grid in a 4-column layout.
-
-    Each zone card displays:
-      - Zone name (e.g. "Zone A")
-      - Parked count / Capacity  (e.g. "8 / 10")
-      - Occupancy percentage mini-bar
-      - Status badge: 🟢 AVAILABLE | 🟡 FILLING | 🔴 FULL
-      - Available spaces text
-
-    Card colour reflects status:
-      Green card  → available   (< 60% full)
-      Yellow card → filling     (60–84% full)
-      Red card    → full        (≥ 85% full)
-
-    Parameters:
-        zones (list): Output of load_zones_from_db() — list of zone dicts.
+    Renders the 4-column zone card grid with a 'View Zone' button on each card.
+    Clicking the button opens show_zone_modal() for that zone.
     """
     if not zones:
-        st.warning("⚠️ No zones found in parking.db. "
-                   "Run `python detection_engine.py --source camera` to populate zones, "
-                   "or check that `seed_zones()` ran correctly.")
+        st.info("No zone data found in parking.db. Run detection_engine.py first.")
         return
 
     st.markdown(
-        '<div class="section-label">🗺️ Zone-by-Zone Parking Overview — Live from parking.db</div>',
-        unsafe_allow_html=True
+        '<div class="section-label">&#x1F5FA;&#xFE0F; Zone-by-Zone Parking Overview &mdash; Live from parking.db</div>',
+        unsafe_allow_html=True,
     )
 
-    # Split zones into rows of GRID_COLUMNS
     rows = [zones[i : i + GRID_COLUMNS] for i in range(0, len(zones), GRID_COLUMNS)]
 
     for row in rows:
         cols = st.columns(GRID_COLUMNS)
 
         for col_widget, zone in zip(cols, row):
-            status    = zone.get("status", ZONE_STATUS_AVAILABLE)
-            capacity  = zone.get("capacity",     0)
-            parked    = zone.get("parked_count", 0)
-            available = zone.get("available",    0)
-            occ_pct   = zone.get("occ_pct",     0.0)
-            zone_id   = zone.get("zone_id", "Zone ?")
+            status    = zone.get("status",        ZONE_STATUS_AVAILABLE)
+            capacity  = zone.get("capacity",      0)
+            parked    = zone.get("parked_count",  0)
+            available = zone.get("available",     0)
+            occ_pct   = zone.get("occ_pct",       0.0)
+            zone_id   = zone.get("zone_id",       "Zone ?")
 
-            # ── Choose card CSS class ──────────────────────────────────────────
             if status == ZONE_STATUS_FULL:
-                card_css   = "zone-full"
-                badge_css  = "badge-full"
-                badge_text = "🔴 FULL"
-                count_color= "#f87171"   # red
-                bar_color  = "#ef4444"
+                card_css    = "zone-full"
+                badge_css   = "badge-full"
+                badge_text  = "&#x1F534; FULL"
+                count_color = "#f87171"
+                bar_color   = "#ef4444"
             elif status == ZONE_STATUS_FILLING:
-                card_css   = "zone-filling"
-                badge_css  = "badge-filling"
-                badge_text = "🟡 FILLING"
-                count_color= "#fbbf24"   # yellow
-                bar_color  = "#f59e0b"
-            else:   # available
-                card_css   = "zone-available"
-                badge_css  = "badge-available"
-                badge_text = "🟢 AVAILABLE"
-                count_color= "#4ade80"   # green
-                bar_color  = "#22c55e"
+                card_css    = "zone-filling"
+                badge_css   = "badge-filling"
+                badge_text  = "&#x1F7E1; FILLING"
+                count_color = "#fbbf24"
+                bar_color   = "#f59e0b"
+            else:
+                card_css    = "zone-available"
+                badge_css   = "badge-available"
+                badge_text  = "&#x1F7E2; AVAILABLE"
+                count_color = "#4ade80"
+                bar_color   = "#22c55e"
 
-            # Occupancy bar width (clamped 0–100%)
-            bar_width = min(max(occ_pct, 0.0), 100.0)
-
-            # Compute plural suffix OUTSIDE the f-string to avoid quote conflicts
+            bar_width   = min(max(occ_pct, 0.0), 100.0)
             spaces_word = "spaces" if available != 1 else "space"
 
             card_html = (
@@ -545,42 +594,9 @@ def render_zone_grid(zones: list) -> None:
 
             with col_widget:
                 st.markdown(card_html, unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 8 ─ ZONE DATA TABLE
-# ══════════════════════════════════════════════════════════════════════════════
-
-def render_zone_table(zones: list) -> None:
-    """
-    Shows an expandable table with raw zone data from parking.db.
-    Useful for viva demos — proves the data comes from SQLite.
-
-    Parameters:
-        zones (list): Output of load_zones_from_db().
-    """
-    with st.expander("📋 View Raw Zone Data (Live from parking.db)", expanded=False):
-
-        def status_label(s):
-            if s == ZONE_STATUS_FULL:    return "🔴 Full"
-            if s == ZONE_STATUS_FILLING: return "🟡 Filling"
-            return "🟢 Available"
-
-        table_data = {
-            "Zone"      : [z["zone_id"]                  for z in zones],
-            "Parked"    : [z["parked_count"]              for z in zones],
-            "Capacity"  : [z["capacity"]                  for z in zones],
-            "Available" : [z["available"]                 for z in zones],
-            "Occ %"     : [f"{z['occ_pct']:.1f}%"        for z in zones],
-            "Status"    : [status_label(z["status"])      for z in zones],
-            "Updated"   : [z["last_updated"]              for z in zones],
-        }
-        st.dataframe(table_data, width="stretch", hide_index=True)
-        st.caption(
-            f"📁 Source: parking.db → parking_zones  •  "
-            f"{len(zones)} zone(s)  •  "
-            f"Read at {datetime.now().strftime('%I:%M:%S %p')}"
-        )
+                if st.button("&#x1F50D; View Zone", key=f"view_{zone_id}",
+                             use_container_width=True):
+                    show_zone_modal(zone)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -653,14 +669,11 @@ def main() -> None:
     #   ORDER  BY zone_id ASC
     zones = load_zones_from_db()
 
-    # ── Step 9: Zone card grid ──────────────────────────────────────────────────
+    # ── Step 9: Zone card grid (with View Zone modal buttons) ──────────────────
     render_zone_grid(zones)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Step 10: Raw data table ─────────────────────────────────────────────────
-    render_zone_table(zones)
-
-    # ── Step 11: Footer ─────────────────────────────────────────────────────────
+    # ── Step 10: Footer ─────────────────────────────────────────────────────────
     render_footer()
 
     # ── Step 12: Auto-refresh loop ──────────────────────────────────────────────

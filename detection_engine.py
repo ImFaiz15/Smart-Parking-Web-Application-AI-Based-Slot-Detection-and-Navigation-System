@@ -318,6 +318,47 @@ def annotate_frame(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# FUNCTION 5b ─ save_zone_crops
+# ══════════════════════════════════════════════════════════════════════════════
+
+ZONE_CROPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "zones")
+
+def save_zone_crops(annotated: np.ndarray, zone_coords: dict) -> None:
+    """
+    Crops each zone's bounding box from the annotated frame and saves it
+    as a JPEG image to static/zones/<zone_id>.jpg.
+
+    These images are displayed in the Streamlit modal popup when a user
+    clicks 'View Zone' on a zone card.
+
+    Parameters:
+        annotated   (np.ndarray): The fully annotated frame (with boxes/labels).
+        zone_coords (dict)      : {zone_id: [x1, y1, x2, y2]} in pixels.
+    """
+    os.makedirs(ZONE_CROPS_DIR, exist_ok=True)
+
+    h, w = annotated.shape[:2]
+
+    for zone_id, box in zone_coords.items():
+        if box is None:
+            continue
+        x1, y1, x2, y2 = box
+
+        # Clamp to frame bounds
+        x1c = max(0, x1)
+        y1c = max(0, y1)
+        x2c = min(w, x2)
+        y2c = min(h, y2)
+
+        if x2c <= x1c or y2c <= y1c:
+            continue   # degenerate box — skip
+
+        crop = annotated[y1c:y2c, x1c:x2c]
+        out  = os.path.join(ZONE_CROPS_DIR, f"{zone_id}.jpg")
+        cv2.imwrite(out, crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 6 ─ process_frame
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -352,7 +393,10 @@ def process_frame(frame: np.ndarray, model: YOLO, auto_sync: bool = True) -> tup
     # Step 3: Annotate frame
     annotated = annotate_frame(frame, detections, zone_coords, zone_counts)
 
-    # Step 4: Sync to DB
+    # Step 4: Save per-zone crop images to static/zones/<zone_id>.jpg
+    save_zone_crops(annotated, zone_coords)
+
+    # Step 5: Sync to DB
     sync_summary = None
     if auto_sync:
         sync_summary = sync_zone_counts_to_db(zone_counts)
