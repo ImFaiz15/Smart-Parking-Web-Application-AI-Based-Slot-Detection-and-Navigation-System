@@ -90,14 +90,20 @@ def load_model(model_path: str = MODEL_PATH) -> YOLO:
     """
     Loads the YOLOv8 model.
     Falls back to 'yolov8n.pt' (auto-downloads) if best.pt is missing.
+    Prints class names on load so you can verify labels (e.g. 'car', 'vehicle').
     """
     if not os.path.exists(model_path):
         fallback = "yolov8n.pt"
         print(f"[WARN] '{model_path}' not found. Falling back to '{fallback}'.")
         model_path = fallback
-    print(f"[INFO] Loading model: {model_path}")
+
+    print(f"[INFO] Loading model  : {os.path.abspath(model_path)}")
     model = YOLO(model_path)
-    print(f"[INFO] Model ready. Classes: {list(model.names.values())}")
+    print(f"[INFO] Confidence     : {YOLO_CONFIDENCE}")
+    print(f"[INFO] Classes ({len(model.names)}):")
+    for cls_id, cls_name in sorted(model.names.items()):
+        print(f"         [{cls_id:>3}]  {cls_name}")
+    print("[INFO] Model ready. ✅")
     return model
 
 

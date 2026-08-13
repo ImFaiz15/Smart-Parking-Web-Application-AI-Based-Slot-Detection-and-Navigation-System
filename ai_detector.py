@@ -105,12 +105,15 @@ def load_yolo_model(model_path: str = MODEL_PATH) -> YOLO:
         print(f"[WARN] Place your custom model at: {os.path.abspath(model_path)}")
         model_path = fallback
 
-    print(f"[INFO] Loading YOLOv8 model: {model_path}")
+    print(f"[INFO] Loading model  : {os.path.abspath(model_path)}")
     model = YOLO(model_path)
 
-    # Print the class names your model knows — useful for debugging
-    print(f"[INFO] Model classes: {model.names}")
-    print("[INFO] Model ready.")
+    # Print class ID → name table so you can verify your model's labels
+    print(f"[INFO] Confidence     : {YOLO_CONFIDENCE}")
+    print(f"[INFO] Classes ({len(model.names)}):")
+    for cls_id, cls_name in sorted(model.names.items()):
+        print(f"         [{cls_id:>3}]  {cls_name}")
+    print("[INFO] Model ready. ✅")
     return model
 
 
