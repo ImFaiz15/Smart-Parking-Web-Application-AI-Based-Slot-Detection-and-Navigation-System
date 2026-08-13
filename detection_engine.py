@@ -212,7 +212,10 @@ def sync_zone_counts_to_db(zone_counts: dict) -> dict:
     failed  = []
 
     for zone_id, count in zone_counts.items():
-        ok = update_zone_count(zone_id, count)
+        # Pull the authoritative capacity from ZONE_CONFIG so every DB write
+        # stays in sync with slot_config.py (even if the DB row is stale).
+        zone_cap = ZONE_CONFIG.get(zone_id, {}).get("capacity", None)
+        ok = update_zone_count(zone_id, count, zone_capacity=zone_cap)
         if ok:
             updated += 1
         else:

@@ -403,12 +403,23 @@ def ensure_zones_exist(db_path: str = PARKING_DB_PATH) -> None:
 
     for zone_id, cfg in ZONE_CONFIG.items():
         capacity = cfg.get("capacity", 1)
-        # INSERT OR IGNORE → skips the row entirely if zone_id already exists
+
+        # Try to insert the zone (ignored if it already exists)
         cursor.execute("""
             INSERT OR IGNORE INTO parking_zones
                 (zone_id, capacity, parked_count, available, occ_pct, status, last_updated)
             VALUES (?, ?, 0, ?, 0.0, 'available', ?)
         """, (zone_id, capacity, capacity, timestamp))
+
+        # ALWAYS update the capacity column from ZONE_CONFIG.
+        # This fixes any stale capacity values (e.g. old capacity=1 rows)
+        # without touching parked_count, occ_pct, or status.
+        cursor.execute("""
+            UPDATE parking_zones
+            SET    capacity  = ?,
+                   available = MAX(0, ? - parked_count)
+            WHERE  zone_id   = ?
+        """, (capacity, capacity, zone_id))
 
     conn.commit()
     conn.close()
@@ -475,6 +486,7 @@ def _derive_zone_status(occ_pct: float) -> str:
 def update_zone_count(
     zone_id: str,
     parked_count: int,
+    zone_capacity: int = None,
     db_path: str = PARKING_DB_PATH,
 ) -> bool:
     """
@@ -489,9 +501,11 @@ def update_zone_count(
       last_updated = current timestamp
 
     Parameters:
-        zone_id      (str): Zone name, e.g. 'Zone A'.
-        parked_count (int): Number of vehicles currently detected in this zone.
-        db_path      (str): Database file path.
+        zone_id       (str): Zone name, e.g. 'A1'.
+        parked_count  (int): Number of vehicles currently detected in this zone.
+        zone_capacity (int): Optional — if provided, also writes this as the
+                             zone's capacity (keeps DB in sync with ZONE_CONFIG).
+        db_path       (str): Database file path.
 
     Returns:
         bool: True if zone was found and updated, False otherwise.
@@ -507,7 +521,9 @@ def update_zone_count(
         conn.close()
         return False   # Zone not found in DB
 
-    capacity = row[0]
+    # Use caller-supplied capacity (from ZONE_CONFIG) if given; else use DB value.
+    # This keeps capacity in sync with slot_config.py on every detection write.
+    capacity = zone_capacity if zone_capacity is not None else row[0]
 
     # Clamp parked_count to valid range
     parked_count = max(0, min(parked_count, capacity))
@@ -518,13 +534,14 @@ def update_zone_count(
 
     cursor.execute("""
         UPDATE parking_zones
-        SET    parked_count = ?,
+        SET    capacity     = ?,
+               parked_count = ?,
                available    = ?,
                occ_pct      = ?,
                status       = ?,
                last_updated = ?
         WHERE  zone_id = ?
-    """, (parked_count, available, occ_pct, status, timestamp, zone_id))
+    """, (capacity, parked_count, available, occ_pct, status, timestamp, zone_id))
 
     success = cursor.rowcount > 0
     conn.commit()
