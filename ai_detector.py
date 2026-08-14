@@ -40,6 +40,8 @@ from slot_config import (
     get_all_absolute_coords,
     OVERLAP_THRESHOLD,
     YOLO_CONFIDENCE,
+    YOLO_IOU,
+    VEHICLE_CLASS_NAMES,
     MODEL_PATH,
 )
 
@@ -53,10 +55,12 @@ from parking_db import (
 )
 
 
-# ── COCO class IDs for vehicles ───────────────────────────────────────────────
-# If your custom model (best.pt) uses DIFFERENT class IDs, update this dict.
-# To find your model's class IDs, run: print(model.names)
-VEHICLE_CLASSES = {
+# ── COCO class filter (NOT USED for custom best.pt model) ───────────────────
+# When using best.pt, all classes come from your training dataset.
+# Set VEHICLE_CLASS_NAMES in slot_config.py to filter by name, or leave
+# it empty [] to accept ALL classes from your model.
+# This old COCO dict is kept here for reference only.
+_COCO_VEHICLE_CLASSES = {
     2: "car",
     3: "motorcycle",
     5: "bus",
@@ -154,9 +158,8 @@ def detect_vehicles(image: np.ndarray, model: YOLO) -> list:
     """
     Runs YOLOv8 inference on a single frame and returns vehicle detections.
 
-    For a PRETRAINED COCO model, we filter to classes 2, 3, 5, 7.
-    For a CUSTOM model (best.pt), all detected classes are treated as vehicles
-    if VEHICLE_CLASSES is empty or if your model only has vehicle classes.
+    Uses best.pt (custom-trained model). Pass conf + iou so YOLO handles
+    filtering and NMS internally — no need for manual post-processing.
 
     Parameters:
         image (numpy.ndarray): BGR image/frame.
@@ -165,28 +168,26 @@ def detect_vehicles(image: np.ndarray, model: YOLO) -> list:
     Returns:
         list of dicts: Each dict has 'class_name', 'confidence', 'box'.
     """
-    results = model(image, verbose=False)
+    # YOLO handles confidence threshold AND NMS in one call.
+    results = model(
+        image,
+        conf=YOLO_CONFIDENCE,
+        iou=YOLO_IOU,
+        verbose=False,
+    )
     detections = []
 
     for box in results[0].boxes:
         class_id   = int(box.cls[0])
         confidence = float(box.conf[0])
-
-        # Skip low-confidence detections
-        if confidence < YOLO_CONFIDENCE:
-            continue
-
-        # Get the class name from the model's own class map
         class_name = model.names.get(class_id, f"class_{class_id}")
 
-        # If using COCO pretrained model, filter to vehicle classes only.
-        # If using custom model, accept ALL detections (your model was
-        # trained specifically on vehicles, so all classes are relevant).
-        if VEHICLE_CLASSES and class_id not in VEHICLE_CLASSES:
+        # Optional class-name filter from slot_config.VEHICLE_CLASS_NAMES.
+        # Empty list [] = accept all classes from best.pt.
+        if VEHICLE_CLASS_NAMES and class_name not in VEHICLE_CLASS_NAMES:
             continue
 
         x1, y1, x2, y2 = box.xyxy[0]
-
         detections.append({
             "class_name" : class_name,
             "confidence" : round(confidence, 3),

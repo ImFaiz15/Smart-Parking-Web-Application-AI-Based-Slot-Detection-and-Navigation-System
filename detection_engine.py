@@ -47,6 +47,8 @@ from slot_config import (
     ZONE_CONFIG,
     MODEL_PATH,
     YOLO_CONFIDENCE,
+    YOLO_IOU,
+    VEHICLE_CLASS_NAMES,
     get_all_zone_absolute_coords,
     list_zone_ids,
 )
@@ -114,25 +116,39 @@ def load_model(model_path: str = MODEL_PATH) -> YOLO:
 def detect_vehicles(frame: np.ndarray, model: YOLO) -> list:
     """
     Runs YOLOv8 inference on a single frame.
-    Returns a list of detected vehicle bounding boxes with confidence.
+
+    Improvements vs original:
+      - conf=YOLO_CONFIDENCE  : YOLO discards weak detections before returning.
+      - iou=YOLO_IOU          : Built-in NMS merges stacked duplicate boxes.
+      - class name filter     : If VEHICLE_CLASS_NAMES is set, only those
+                                classes are kept (e.g. ['Car']).
+        Leave VEHICLE_CLASS_NAMES=[] to accept all classes from best.pt.
 
     Returns:
         list of dicts:
-        [{'box': [x1,y1,x2,y2], 'class_name': 'car', 'confidence': 0.87}, ...]
+        [{'box': [x1,y1,x2,y2], 'class_name': 'Car', 'confidence': 0.87}, ...]
     """
-    results    = model(frame, verbose=False)
+    # Let YOLO handle confidence filtering AND NMS in a single call.
+    # This is faster and cleaner than post-processing manually.
+    results = model(
+        frame,
+        conf=YOLO_CONFIDENCE,
+        iou=YOLO_IOU,
+        verbose=False,
+    )
     detections = []
 
     for box in results[0].boxes:
         class_id   = int(box.cls[0])
         confidence = float(box.conf[0])
+        class_name = model.names.get(class_id, f"class_{class_id}")
 
-        if confidence < YOLO_CONFIDENCE:
+        # Optional class-name filter (e.g. keep only 'Car' from custom model).
+        # Skip the check when VEHICLE_CLASS_NAMES is empty (accept all).
+        if VEHICLE_CLASS_NAMES and class_name not in VEHICLE_CLASS_NAMES:
             continue
 
-        class_name = model.names.get(class_id, f"class_{class_id}")
         x1, y1, x2, y2 = box.xyxy[0]
-
         detections.append({
             "class_name": class_name,
             "confidence": round(confidence, 3),

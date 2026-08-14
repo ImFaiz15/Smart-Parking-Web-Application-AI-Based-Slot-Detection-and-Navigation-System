@@ -38,8 +38,21 @@ HOW to update ZONE_CONFIG:
 OVERLAP_THRESHOLD = 0.15
 
 # Minimum YOLO confidence score to accept a vehicle detection.
-# Detections below this value are treated as false positives.
-YOLO_CONFIDENCE = 0.35
+# Raised to 0.45 to filter out weak / false-positive detections.
+# Detections below this value are treated as noise and discarded.
+YOLO_CONFIDENCE = 0.45
+
+# IoU threshold for Non-Maximum Suppression (NMS).
+# Overlapping boxes with IoU > this value are merged into one.
+# 0.45 is the standard value — prevents stacked duplicate bounding boxes.
+YOLO_IOU = 0.45
+
+# ── Custom model class filter ───────────────────────────────────────────────
+# List of class NAMES that count as vehicles in your custom best.pt model.
+# Leave empty [] to accept ALL classes (useful if model is vehicle-only).
+# Example: ["Car", "car"] if your model labels vehicles as 'Car'.
+# The engine will check model.names at runtime and filter by these strings.
+VEHICLE_CLASS_NAMES: list = []   # [] = accept all classes from best.pt
 
 # YOLOv8 model file to use.
 # 'best.pt'    = YOUR custom-trained model (in project root)
