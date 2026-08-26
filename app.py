@@ -425,8 +425,6 @@ def render_navigation_sidebar(zone_stats: dict) -> tuple:
 
         # -- Zone Summary stats card
         st.markdown(f"""
-        <div style="background:#0a1628;border:1px solid #1a3058;border-radius:14px;padding:14px 16px;">
-            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.82rem;border-bottom:1px solid #0d1f3c;">
                 <span style="color:#4a6080;font-weight:600;">Total Capacity</span>
                 <span style="color:#93c5fd;font-weight:700;">{zone_stats.get('total_capacity', 0)}</span>
             </div>
